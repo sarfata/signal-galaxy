@@ -83,6 +83,13 @@ describe("anonymous temporary webhook ownership", () => {
     expect(posts[1].headers["webhook-id"]).toBe(posts[2].headers["webhook-id"]);
     expect(posts[1].headers["webhook-signature"]).not.toBe(posts[2].headers["webhook-signature"]);
   });
+  it("applies maxAgeMs to initial replay, not newly arriving live messages", async () => {
+    const start = await hooks.subscribe({ ...input, maxAgeMs: 0 }, "a");
+    galaxy.send(start.subscriberId, { kind: "message", text: "Keep this live event" }, "v");
+    vi.setSystemTime(Date.now() + 1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts.some(p => JSON.parse(p.body).data?.text === "Keep this live event")).toBe(true);
+  });
   it("stops retries on explicit removal and retains other modes on the same dot", async () => {
     const start = await hooks.subscribe(input, "a");
     galaxy.poll(input, "a");

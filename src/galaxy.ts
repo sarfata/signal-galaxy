@@ -132,7 +132,8 @@ export class Galaxy {
     row.listeners.add(wake);
     return {
       subscriberId: row.id, cursor, truncated: initial.truncated,
-      read: (cursor: string) => this.replay(row, { ...input, cursor }, 1),
+      // maxAgeMs bounds the initial replay, not newly arriving live events.
+      read: (cursor: string) => this.replay(row, { ...input, cursor, maxAgeMs: undefined }, 1),
       detach: () => { row.webhooks.delete(id); row.listeners.delete(wake); this.sweep(); }
     };
   }
