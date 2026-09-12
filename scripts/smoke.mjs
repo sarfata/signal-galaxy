@@ -44,7 +44,7 @@ try {
   assert.equal(client.getProtocolEra(), mode === "auto" ? "modern" : "legacy");
   assert((await client.listTools()).tools.some(tool => tool.name === "subscribers_list"));
   const catalog = await client.request({ method: "events/list", params: {} }, schema);
-  assert.deepEqual(catalog.events[0].delivery, ["push", "poll"]);
+  assert.deepEqual(catalog.events[0].delivery, ["push", "poll", "webhook"]);
   for (const method of ["active", "event", "heartbeat"]) {
     client.setNotificationHandler("notifications/events/" + method, { params: schema }, data => {
       received.push({ method, data });

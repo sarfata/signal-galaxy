@@ -13,9 +13,10 @@ MCP server SDK serves both legacy initialization and modern discovery.
 
 ## Start listening
 
-Call events/list to discover galaxy.signal. Supported delivery modes are push
-and poll. Webhooks are not advertised: the Events draft requires an authenticated
-principal for webhook ownership, and this service deliberately has no login.
+Call events/list to discover galaxy.signal. Supported delivery modes are push,
+poll, and webhook. Webhooks use the anonymous, temporary ownership extension
+described below; this is deliberately not strict conformance with the draft's
+authenticated-principal requirement.
 
 Subscription arguments:
 
@@ -24,8 +25,9 @@ Subscription arguments:
   digits, hyphens, or underscores. A UUID works. Keep the same name and clientId
   when polling or reconnecting. Different IDs let clients have the same name.
 
-The first events/stream or events/poll creates your dot; subscribers_list only
-lists listeners and never subscribes. There is no extra registration step.
+The first events/stream or events/poll creates your dot; a verified events/subscribe
+does the same for webhooks. subscribers_list only lists listeners and never joins.
+Keep the subscription current to stay visible.
 
 ```json
 {"jsonrpc":"2.0","id":"listen","method":"events/stream","params":{"name":"galaxy.signal","arguments":{"name":"Voyager","clientId":"replace-with-a-random-uuid"}}}
@@ -70,8 +72,73 @@ mcporter events galaxy stream galaxy.signal --arguments '{"name":"Voyager","clie
 mcporter call galaxy.subscribers_list
 ```
 
-Leave the stream running while a visitor uses the website. Receiving an event
+Keep your subscription current while a visitor uses the website. Receiving an event
 does not itself invoke a model: the client/agent harness decides how to react.
+
+## Webhooks: temporary ownership, up to 30 minutes
+
+Call events/subscribe with the same event name/arguments, delivery containing
+mode: "webhook", an HTTPS url, and a random Standard Webhooks secret: "whsec_"
+followed by base64 of 24–64 random bytes. Never use a name or password as a secret.
+Prepare the receiver with that secret before subscribing.
+
+```json
+{"method":"events/subscribe","params":{"name":"galaxy.signal","arguments":{"name":"Voyager","clientId":"replace-with-a-random-uuid"},"delivery":{"mode":"webhook","url":"https://your-receiver.example/events","secret":"whsec_REPLACE_WITH_BASE64_OF_32_RANDOM_BYTES"},"ttlMs":1800000}}
+```
+
+The server sends a signed {"type":"verification","challenge":"..."} POST first.
+Verify its signature, then return HTTP 2xx with JSON {"challenge":"..."} echoing
+the exact challenge. A failed verification creates no subscription or visible dot.
+Event POSTs use the same EventOccurrence shape shown above. Signed gap controls
+have {"type":"gap","cursor":"..."}; treat them as truncated history.
+
+Every POST has webhook-id, webhook-timestamp, webhook-signature and
+X-MCP-Subscription-Id. Verify v1,HMAC-SHA256(decodedSecret,
+webhook-id + "." + webhook-timestamp + "." + rawBody), encoded as base64. Reject
+timestamps more than five minutes old and deduplicate by webhook-id. Return 2xx
+only after accepting the event. Retries use the same message ID, with a fresh
+timestamp/signature: up to four attempts, with 1s, 5s and 25s backoff. HTTP 410
+and 413 abandon that delivery without removing the subscription.
+
+The response gives id, public subscriberId, refreshBefore, cursor, truncated and
+deliveryStatus. Refresh using events/subscribe with the identical name, arguments,
+URL and secret before refreshBefore. Each refresh re-grants the lease: between
+5 seconds and 30 minutes; omitted/null ttlMs grants 30 minutes, never infinity.
+The same secret is required throughout a live lease. Secret rotation in place is
+not supported: unsubscribe with the old secret, then verify a new registration.
+
+To leave immediately, call events/unsubscribe with name, arguments and delivery
+containing BOTH url and secret. This extra secret field is a playground extension:
+
+```json
+{"method":"events/unsubscribe","params":{"name":"galaxy.signal","arguments":{"name":"Voyager","clientId":"replace-with-a-random-uuid"},"delivery":{"url":"https://your-receiver.example/events","secret":"whsec_SAME_SECRET_AS_SUBSCRIBE"}}}
+```
+
+MCPorter's Events fork supports subscribe/refresh with --url, --secret and
+--ttl-ms. Its stock unsubscribe command does not yet send this extra secret;
+use a direct SDK request or let the lease expire. A standard-only client needs
+this documented adaptation for anonymous unsubscribe.
+
+Ownership is only over this callback registration, not the public display name
+or inbox. Knowing a dot ID does not allow renewal, removal or secret changes.
+Secrets, callback URLs and IPs are never exposed in the roster. On expiry the
+registration, secret and ownership are discarded. Re-registering after expiry or
+a restart always verifies the endpoint again. Everything remains in RAM: even a
+30-minute grant can be lost on a restart; clients must reconstruct it. This soft
+state behavior and anonymous ownership are explicit draft deviations.
+
+## Rings and hover details
+
+The public subscriber list includes subscriptions with type, renewedAt, expiresAt
+and ttlMs. /api/subscribers also returns serverTime so countdowns do not depend on
+the visitor's wall clock. No callback URLs, secrets or source IPs are included.
+
+The ring shrinks over the remaining lease and grows on renewal. Push streams
+have no fixed expiry and keep a full ring while connected. A disconnected stream
+gets its existing 10-second reconnect grace; polls renew the 90-second poll lease;
+webhooks renew their granted lease. With multiple delivery modes, the ring shows
+the longest-lived one (a connected push stream wins). Hover/focus shows each
+mode's remaining time; the roster shows the overall remaining lifetime.
 
 ## Public by design
 
@@ -85,10 +152,17 @@ This is a single-process Fly service. A restart empties the sky. Do not scale it
 to multiple machines without adding shared state.
 
 Limits: 128 subscribers total, 8 per source IP, 2 streams per subscriber and 128
-streams total. New registrations allow 8/IP/minute and 32 globally/minute.
+streams total. Webhooks: 128 total, 4/source IP, 2/subscriber, 8 concurrent updates.
+New webhook verifications allow 4/IP/minute, 8/callback-host/minute and 16 globally;
+refreshes allow 30/IP/minute. Private/reserved IPs, DNS rebinding and redirects
+are blocked; outbound requests time out after 5s and responses are size-limited.
+New subscriber registrations allow 8/IP/minute and 32 globally/minute.
 Signals allow bursts of 20/IP, 12/recipient, and 300 globally, each refilling over
 one minute. HTTP 429 returns retryAfterMs and Retry-After. MCP resource-exhausted
 errors may include retryAfterMs; back off instead of repeatedly retrying.
 
 The Events extension is an unapproved draft:
 https://github.com/modelcontextprotocol/experimental-ext-triggers-events/blob/pja/design-sketch/docs/design-sketch-proposal.md
+
+Working group: https://github.com/modelcontextprotocol/experimental-ext-triggers-events
+Source (MIT): https://github.com/sarfata/signal-galaxy

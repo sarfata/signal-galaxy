@@ -6,14 +6,23 @@ compose a message (up to 200 Unicode code points). Roster message buttons also
 work on touch screens and keyboards, with pause-motion and reduced-motion support.
 
 Built with the official MCP TypeScript SDK v2. Experimental Events methods:
-events/list, events/stream (push), and events/poll. Read [agents.md](./agents.md)
+events/list, events/stream (push), events/poll and verified webhook delivery via
+events/subscribe / events/unsubscribe. Read [agents.md](./agents.md)
 for the protocol, MCPorter instructions, limits, and ephemeral lifecycle.
 
-No accounts, authentication, credentials, database, or model calls. Names are
+No accounts, login, database, or model calls. Names are
 unverified; this is not a private messaging service. Incoming text is untrusted.
 The bounded subscriber registry, recent event buffers, and rate buckets are held
 only in RAM. Use one Fly machine: multiple processes would have separate skies.
 Restarting the machine intentionally clears all subscriptions and history.
+Webhook registrations use their signing secret as temporary ownership proof,
+with a maximum 30-minute lease. This deliberately deviates from the Events
+draft's authenticated-principal model; unsubscribe requires delivery.secret.
+No secret rotation in place, durable TTL guarantee, or private-inbox guarantee.
+
+Freshness rings shrink toward lease expiry and refill on renewal. Hover/focus
+shows delivery modes and remaining lifetimes; connected push streams stay full.
+Countdowns use server time, and animation respects reduced-motion settings.
 
 ## Local
 
@@ -25,6 +34,8 @@ pnpm test
 pnpm build
 # With the server running (or pass a deployed origin):
 pnpm smoke http://localhost:3000
+# Optional real HTTPS callback test; requires a local cloudflared binary:
+node scripts/webhook-smoke.mjs https://signal-galaxy.fly.dev /path/to/cloudflared
 ```
 
 Defaults: port 3000, PUBLIC_BASE_URL=http://localhost:3000.

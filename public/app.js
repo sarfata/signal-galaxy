@@ -1,4 +1,5 @@
 import { clickIntent } from "./clicks.js";
+import { freshness, snapshotClock } from "./freshness.js";
 const $ = id => document.getElementById(id);
 const colors = ["#d9fa86", "#99caff", "#d5a0fc", "#ffbba3", "#9ef2d6", "#f3d58d"];
 let subscribers = [];
@@ -7,6 +8,8 @@ let online = false;
 let toastTimer;
 let polling = true;
 const nodes = new Map();
+let serverNow = () => Date.now();
+let freshnessTimer;
 const label = s => s.name + " · " + s.id.slice(-4);
 const intent = clickIntent({ ping: id => sendSignal(id, "ping").catch(() => {}), compose: id => compose(id) });
 
@@ -73,6 +76,7 @@ function glow(id) {
 function render(data) {
   const previous = new Map(subscribers.map(s => [s.id, s]));
   subscribers = data.subscribers;
+  serverNow = snapshotClock(data.serverTime ?? new Date().toISOString(), performance.now());
   $("count").textContent = subscribers.length;
   $("connection").textContent = subscribers.length ? subscribers.length + (subscribers.length === 1 ? " signal in orbit" : " signals in orbit") : "The galaxy is live";
   $("empty").hidden = subscribers.length > 0;
@@ -87,11 +91,14 @@ function render(data) {
     if (!star) {
       star = document.createElement("button"); star.className = "star";
       star.setAttribute("aria-label", "Ping " + label(s) + "; double-click to send a message");
-      star.title = label(s) + " · click to ping, double-click to write";
       const core = document.createElement("span"); core.className = "star-core"; core.setAttribute("aria-hidden", "true");
+      const ring = document.createElement("span"); ring.className = "freshness-ring"; core.append(ring);
+      const orb = document.createElement("span"); orb.className = "star-orb"; orb.append(core);
       const name = document.createElement("span"); name.className = "star-name"; name.textContent = s.name;
       const badge = document.createElement("span"); badge.className = "star-id"; badge.textContent = s.id.slice(-4);
-      star.append(core, name, badge);
+      const tooltip = document.createElement("span"); tooltip.className = "star-tooltip"; tooltip.id = "presence-" + s.id; tooltip.setAttribute("role", "tooltip");
+      star.setAttribute("aria-describedby", tooltip.id);
+      star.append(orb, name, badge, tooltip);
       star.addEventListener("click", event => intent.click(s.id, event.detail));
       star.addEventListener("dblclick", event => { event.preventDefault(); intent.cancel(s.id); compose(s.id); });
       $("stars").append(star); nodes.set(s.id, star);
@@ -106,6 +113,7 @@ function render(data) {
     const button = document.createElement("button"); button.className = "name-button"; button.setAttribute("aria-label", "Ping " + label(s));
     const title = document.createElement("strong"); title.textContent = s.name;
     const detail = document.createElement("small"); detail.textContent = s.id.slice(-4) + " / " + (s.modes.join(" + ") || "reconnecting");
+    detail.className = "presence-detail"; detail.dataset.subscriber = s.id;
     button.append(title, detail); button.onclick = event => intent.click(s.id, event.detail);
     button.ondblclick = event => { event.preventDefault(); intent.cancel(s.id); compose(s.id); };
     const message = document.createElement("button"); message.className = "message-button"; message.textContent = "✉"; message.setAttribute("aria-label", "Send a message to " + label(s)); message.onclick = () => compose(s.id);
@@ -113,6 +121,29 @@ function render(data) {
   });
   // Avoid replacing focused list controls during background refreshes.
   if (!$("subscribers").contains(document.activeElement)) $("subscribers").replaceChildren(list);
+  paintFreshness();
+}
+function paintFreshness() {
+  if (document.hidden || !polling) return;
+  const now = serverNow(performance.now());
+  const statuses = new Map();
+  for (const s of subscribers) {
+    const state = freshness(s.subscriptions, now);
+    const node = nodes.get(s.id);
+    if (!node) continue;
+    const summary = online ? state.summary : "Status unknown · reconnecting";
+    statuses.set(s.id, summary);
+    node.style.setProperty("--freshness-scale", String(.3 + .7 * state.fraction));
+    node.style.setProperty("--freshness-opacity", String(.15 + .65 * state.fraction));
+    const tooltip = node.querySelector(".star-tooltip");
+    const details = label(s) + "\n" + (online ? state.details : "Connection lost; last known subscription state.");
+    if (tooltip.textContent !== details) tooltip.textContent = details;
+  }
+  for (const detail of document.querySelectorAll(".presence-detail")) {
+    const id = detail.dataset.subscriber;
+    const value = id.slice(-4) + " / " + (statuses.get(id) ?? "left the galaxy");
+    if (detail.textContent !== value) detail.textContent = value;
+  }
 }
 async function refresh() {
   if (!polling) return;
@@ -125,8 +156,9 @@ async function refresh() {
     if (!subscribers.length) $("roster-empty").textContent = "Connection interrupted. Trying again…";
   } finally { if (polling) setTimeout(refresh, document.hidden ? 10_000 : 2000); }
 }
-window.addEventListener("pagehide", () => { polling = false; intent.clear(); });
-window.addEventListener("pageshow", event => { if (event.persisted) { polling = true; refresh(); } });
+window.addEventListener("pagehide", () => { polling = false; intent.clear(); clearInterval(freshnessTimer); });
+window.addEventListener("pageshow", event => { if (event.persisted) { polling = true; refresh(); freshnessTimer = setInterval(paintFreshness, 250); } });
+freshnessTimer = setInterval(paintFreshness, 250);
 refresh();
 
 // Optional browser-native tools use the same visible data and send action.

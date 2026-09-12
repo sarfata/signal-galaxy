@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 const fixtures: ReturnType<typeof createApp>[] = [];
-function setup() { const f = createApp("http://localhost:3011", { trustFlyProxy: true }); fixtures.push(f); return f; }
+function setup(options: Parameters<typeof createApp>[1] = {}) { const f = createApp("http://localhost:3011", { trustFlyProxy: true, ...options }); fixtures.push(f); return f; }
 afterEach(async () => { for (const f of fixtures.splice(0)) await f.close(); });
 async function rpc(f: ReturnType<typeof createApp>, method: string, params: object = {}, ip = "192.0.2.1") {
   const response = await f.app.request("/mcp", { method: "POST", headers: { Host: "localhost:3011", "Content-Type": "application/json", Accept: "application/json, text/event-stream", "fly-client-ip": ip }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
@@ -20,12 +20,13 @@ describe("MCP + public visitor API", () => {
     const guide = await (await f.app.request("/agents.md")).text();
     expect(guide).toContain("http://localhost:3011/mcp"); expect(guide).not.toContain("https://signal-galaxy.fly.dev");
   });
-  it("initializes anonymously and advertises only push and poll", async () => {
+  it("initializes anonymously and advertises all modes plus the ownership deviation", async () => {
     const f = setup();
     const init = await rpc(f, "initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } });
     expect(init.response.status).toBe(200); expect(init.message.result.capabilities.events).toBeTruthy();
     const listed = await rpc(f, "events/list");
-    expect(listed.message.result.events[0].delivery).toEqual(["push", "poll"]);
+    expect(listed.message.result.events[0].delivery).toEqual(["push", "poll", "webhook"]);
+    expect(listed.message.result.events[0]._meta["signal-galaxy/webhook-ownership"].draftDeviation).toBe(true);
     expect(listed.message.result.events[0].inputSchema.required).toEqual(["name", "clientId"]);
     expect((await rpc(f, "tools/call", { name: "subscribers_list", arguments: {} })).message.result.structuredContent.subscribers).toEqual([]);
   });
@@ -58,5 +59,18 @@ describe("MCP + public visitor API", () => {
     for (let i = 0; i < 13; i++) response = await f.app.request("/api/subscribers/" + id + "/signals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "ping" }) });
     expect(response.status).toBe(429); expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
     expect((await response.json()).retryAfterMs).toBeGreaterThan(0);
+  });
+  it("routes webhook registration and protected removal through the official MCP handler", async () => {
+    const secret = "whsec_" + Buffer.alloc(32, 9).toString("base64");
+    const f = setup({ webhookHttp: { post: async (_url, body) => ({ status: 200, body: JSON.stringify({ challenge: JSON.parse(body).challenge }) }) } });
+    const delivery = { url: "https://receiver.example/callback", secret };
+    const started = await rpc(f, "events/subscribe", { ...params, delivery: { ...delivery, mode: "webhook" }, ttlMs: 30_000 });
+    expect(started.message.error).toBeUndefined();
+    const snapshot = await (await f.app.request("/api/subscribers")).json();
+    expect(Date.parse(snapshot.serverTime)).toBeGreaterThan(0);
+    expect(snapshot.subscribers[0].subscriptions[0].expiresAt).toBe(started.message.result.refreshBefore);
+    expect((await rpc(f, "events/unsubscribe", { ...params, delivery: { url: delivery.url } })).message.error.code).toBe(-32602);
+    expect((await rpc(f, "events/unsubscribe", { ...params, delivery })).message.error).toBeUndefined();
+    expect(f.galaxy.list()).toEqual([]);
   });
 });
