@@ -63,7 +63,16 @@ try {
   await client.connect(new StreamableHTTPClientTransport(new URL(base + "/mcp")));
   const params = { name: "galaxy.signal", arguments: { name: "Webhook test " + randomUUID().slice(0, 6), clientId: randomUUID() }, delivery: { mode: "webhook", url: publicUrl + callbackPath, secret }, ttlMs: 15_000 };
   removal = { name: params.name, arguments: params.arguments, delivery: { url: params.delivery.url, secret } };
-  const start = await client.request({ method: "events/subscribe", params }, schema);
+  let start;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { start = await client.request({ method: "events/subscribe", params }, schema); break; }
+    catch (error) {
+      if (attempt === 2 || error.code !== -32015 || !["connection_refused", "timeout", "http_5xx"].includes(error.data?.reason)) throw error;
+      // Quick Tunnel edge/DNS propagation can lag its registered connection.
+      // Retry the complete signed verification; never bypass the challenge.
+      await delay(2000 * (attempt + 1));
+    }
+  }
   registered = true;
   assert(arrivals.some(a => a.payload.type === "verification"));
   const star = (await roster()).find(s => s.id === start.subscriberId);
