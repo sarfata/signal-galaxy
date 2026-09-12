@@ -95,10 +95,9 @@ function render(data) {
       const ring = document.createElement("span"); ring.className = "freshness-ring"; core.append(ring);
       const orb = document.createElement("span"); orb.className = "star-orb"; orb.append(core);
       const name = document.createElement("span"); name.className = "star-name"; name.textContent = s.name;
-      const badge = document.createElement("span"); badge.className = "star-id"; badge.textContent = s.id.slice(-4);
       const tooltip = document.createElement("span"); tooltip.className = "star-tooltip"; tooltip.id = "presence-" + s.id; tooltip.setAttribute("role", "tooltip");
       star.setAttribute("aria-describedby", tooltip.id);
-      star.append(orb, name, badge, tooltip);
+      star.append(orb, name, tooltip);
       star.addEventListener("click", event => intent.click(s.id, event.detail));
       star.addEventListener("dblclick", event => { event.preventDefault(); intent.cancel(s.id); compose(s.id); });
       $("stars").append(star); nodes.set(s.id, star);
@@ -112,7 +111,7 @@ function render(data) {
     const dot = document.createElement("span"); dot.className = "dot";
     const button = document.createElement("button"); button.className = "name-button"; button.setAttribute("aria-label", "Ping " + label(s));
     const title = document.createElement("strong"); title.textContent = s.name;
-    const detail = document.createElement("small"); detail.textContent = s.id.slice(-4) + " / " + (s.modes.join(" + ") || "reconnecting");
+    const detail = document.createElement("small"); detail.textContent = s.modes.join(" + ") || "reconnecting";
     detail.className = "presence-detail"; detail.dataset.subscriber = s.id;
     button.append(title, detail); button.onclick = event => intent.click(s.id, event.detail);
     button.ondblclick = event => { event.preventDefault(); intent.cancel(s.id); compose(s.id); };
@@ -136,12 +135,12 @@ function paintFreshness() {
     node.style.setProperty("--freshness-scale", String(.3 + .7 * state.fraction));
     node.style.setProperty("--freshness-opacity", String(.15 + .65 * state.fraction));
     const tooltip = node.querySelector(".star-tooltip");
-    const details = label(s) + "\n" + (online ? state.details : "Connection lost; last known subscription state.");
+    const details = s.name + "\nID: " + s.id.slice(-4) + "\n" + (online ? state.details : "Connection lost; last known subscription state.");
     if (tooltip.textContent !== details) tooltip.textContent = details;
   }
   for (const detail of document.querySelectorAll(".presence-detail")) {
     const id = detail.dataset.subscriber;
-    const value = id.slice(-4) + " / " + (statuses.get(id) ?? "left the galaxy");
+    const value = statuses.get(id) ?? "left the galaxy";
     if (detail.textContent !== value) detail.textContent = value;
   }
 }
