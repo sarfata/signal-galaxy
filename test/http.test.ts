@@ -11,6 +11,40 @@ async function rpc(f: ReturnType<typeof createApp>, method: string, params: obje
 }
 const params = { name: "galaxy.signal", arguments: { name: "Test star", clientId: "test-client-uuid" } };
 describe("MCP + public visitor API", () => {
+  it("serves only the exact configured verification token as public, non-cacheable plain text", async () => {
+    const token = "test-domain-verification-token_0123456789-AbCd";
+    const f = setup({ openaiAppsChallenge: `  ${token}\n` });
+    const response = await f.app.request("/.well-known/openai-apps-challenge");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^text\/plain; charset=utf-8$/i);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.has("location")).toBe(false);
+    expect(await response.text()).toBe(token);
+    const head = await f.app.request("/.well-known/openai-apps-challenge", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+  });
+  it("does not publish a placeholder when no verification token is configured", async () => {
+    for (const openaiAppsChallenge of [undefined, "", " \n"]) {
+      const response = await setup({ openaiAppsChallenge }).app.request("/.well-known/openai-apps-challenge");
+      expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
+    expect(() => setup({ openaiAppsChallenge: "first-token\nsecond-token" })).toThrow("single verification token");
+    expect(() => setup({ openaiAppsChallenge: "x".repeat(4097) })).toThrow("single verification token");
+  });
+  it("advertises all three safety hints on every MCP tool without creating a subscription", async () => {
+    const f = setup();
+    const listed = await rpc(f, "tools/list");
+    expect(listed.response.status).toBe(200);
+    expect(listed.message.error).toBeUndefined();
+    const annotations = Object.fromEntries(listed.message.result.tools.map((tool: { name: string; annotations?: unknown }) => [tool.name, tool.annotations]));
+    expect(annotations).toEqual({
+      subscribers_list: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
+    });
+    expect(f.galaxy.list()).toEqual([]);
+  });
   it("serves the galaxy and deployment-specific guide with safe headers", async () => {
     const f = setup();
     for (const path of ["/", "/app.js", "/clicks.js", "/style.css", "/favicon.svg", "/health"]) expect((await f.app.request(path)).status).toBe(200);

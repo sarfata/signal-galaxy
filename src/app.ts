@@ -11,7 +11,11 @@ import { ArgumentsSchema, EVENT_NAME, Galaxy, LimitError, RequestSchema } from "
 import { MAX_WEBHOOK_TTL_MS, WebhookService } from "./webhooks.js";
 import type { WebhookHttpClient } from "./webhook-http.js";
 
-export function createApp(baseUrl: string, options: { galaxy?: Galaxy; trustFlyProxy?: boolean; webhookHttp?: WebhookHttpClient } = {}) {
+export function createApp(baseUrl: string, options: { galaxy?: Galaxy; trustFlyProxy?: boolean; webhookHttp?: WebhookHttpClient; openaiAppsChallenge?: string } = {}) {
+  const openaiAppsChallenge = options.openaiAppsChallenge?.trim();
+  if (openaiAppsChallenge && (openaiAppsChallenge.length > 4096 || /\s/.test(openaiAppsChallenge))) {
+    throw new Error("OPENAI_APPS_CHALLENGE must be a single verification token");
+  }
   const galaxy = options.galaxy ?? new Galaxy();
   const webhooks = new WebhookService(galaxy, options.webhookHttp);
   const base = new URL(baseUrl).origin;
@@ -33,7 +37,7 @@ export function createApp(baseUrl: string, options: { galaxy?: Galaxy; trustFlyP
     };
     server.registerTool("subscribers_list", {
       title: "List listening subscribers", description: "List public, unverified subscribers currently visible in the galaxy. Listing does not join.",
-      inputSchema: z.object({}), annotations: { readOnlyHint: true, openWorldHint: true }
+      inputSchema: z.object({}), annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
     }, async () => {
       const value = { subscribers: galaxy.list() };
       return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -72,6 +76,10 @@ export function createApp(baseUrl: string, options: { galaxy?: Galaxy; trustFlyP
   app.use("/api/*", bodyLimit({ maxSize: 2048 }));
   app.use("/mcp", bodyLimit({ maxSize: 16_384 }));
   app.get("/health", c => c.json({ ok: true, subscribers: galaxy.list().length, persistence: "memory" }));
+  app.get("/.well-known/openai-apps-challenge", c => {
+    c.header("Cache-Control", "no-store");
+    return openaiAppsChallenge ? c.text(openaiAppsChallenge) : c.notFound();
+  });
   app.get("/api/subscribers", c => {
     c.header("Cache-Control", "no-store");
     return c.json({ subscribers: galaxy.list(), capacity: 128, serverTime: new Date(galaxy.now()).toISOString() });
